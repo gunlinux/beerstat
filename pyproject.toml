@@ -1,0 +1,32 @@
+[project]
+name = "beerstat"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "aiohttp>=3.12.15",
+    "flask-admin>=1.6.1",
+    "flask-migrate>=4.1.0",
+    "flask-sqlalchemy>=3.1.1",
+    "python-dotenv>=1.1.1",
+    "requeue==0.2.4",
+]
+
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.1",
+]
+
+
+[tool.uv.sources]
+requeue = { git = "https://github.com/gunlinux/requeue" }
+
+
+[tool.pyright]
+ignore = ["tests"]
+reportMissingTypeStubs = false
+reportUnannotatedClassAttribute = false
+
+
