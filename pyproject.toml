@@ -31,5 +31,7 @@ ignore = ["migrations"]
 reportMissingTypeStubs = false
 reportUnannotatedClassAttribute = false
 reportCallIssue = false
-
-
+reportUnusedFunction = false
+reportExplicitAny = false
+reportAny = false
+reportUnknownMemberType = false

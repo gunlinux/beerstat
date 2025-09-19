@@ -1,15 +1,17 @@
-import typing
+from collections.abc import Generator
+from typing import Any
 import pytest
 import os
 from datetime import datetime
+from flask.testing import FlaskClient
 
 from app import create_app
-from app import db
+from app.extensions import db
 from app.models import BeerDonation
 
 
 @pytest.fixture()
-def test_client():
+def test_client() -> Generator[FlaskClient, Any, Any]:
     os.environ["FLASK_ENV"] = "testing"
     app = create_app(testing=True)
     app.config.update(
@@ -17,6 +19,7 @@ def test_client():
     )
     with app.test_client() as client:
         with app.app_context():
+            print(type(db.session))
             db.create_all()
         yield client
         with app.app_context():
@@ -24,7 +27,7 @@ def test_client():
             db.drop_all()
 
 
-def test_donate_endpoint_success(test_client) -> None:
+def test_donate_endpoint_success(test_client: FlaskClient) -> None:
     """Test successful donation creation"""
     donation_data = {
         "date": datetime.now().isoformat(),
@@ -40,7 +43,7 @@ def test_donate_endpoint_success(test_client) -> None:
     assert response.get_json() == {"message": "Success"}
 
 
-def test_donate_endpoint_invalid_data(test_client):
+def test_donate_endpoint_invalid_data(test_client: FlaskClient) -> None:
     """Test donation with invalid data"""
     # Test with missing data
     response = test_client.post("/donate", json={}, content_type="application/json")
@@ -48,7 +51,7 @@ def test_donate_endpoint_invalid_data(test_client):
     assert response.status_code == 400
 
 
-def test_donate_endpoint_no_data(test_client):
+def test_donate_endpoint_no_data(test_client: FlaskClient) -> None:
     """Test donation with no data"""
     response = test_client.post("/donate")
 
@@ -56,7 +59,7 @@ def test_donate_endpoint_no_data(test_client):
     assert response.status_code == 415
 
 
-def test_balance_endpoint_empty(test_client):
+def test_balance_endpoint_empty(test_client: FlaskClient) -> None:
     """Test balance endpoint with no donations"""
     response = test_client.get("/balance")
 
@@ -64,7 +67,7 @@ def test_balance_endpoint_empty(test_client):
     assert response.get_json() == {"Total": None}
 
 
-def test_balance_endpoint_with_donations(test_client):
+def test_balance_endpoint_with_donations(test_client: FlaskClient) -> None:
     """Test balance endpoint with donations"""
     # Add a donation first
     donation_data = {
@@ -83,10 +86,12 @@ def test_balance_endpoint_with_donations(test_client):
     response = test_client.get("/balance")
 
     assert response.status_code == 200
-    assert response.get_json() == {"Total": 50.0}
+    result = response.get_json()
+    assert result is not None
+    assert result["Total"] == 50.0
 
 
-def test_multiple_donations(test_client):
+def test_multiple_donations(test_client: FlaskClient) -> None:
     """Test multiple donations and cumulative balance"""
     donations = [
         {"date": datetime.now().isoformat(), "value": 25.0, "name": "Donor 1"},
@@ -105,14 +110,17 @@ def test_multiple_donations(test_client):
     response = test_client.get("/balance")
 
     assert response.status_code == 200
-    assert response.get_json() == {"Total": 200.5}
+    result = response.get_json()
+    assert result is not None
+    assert result["Total"] == 200.5
 
 
 def test_donation_model() -> None:
     """Test BeerDonation model creation"""
     donation = BeerDonation(name="Test Donor", value=50.0)
 
-    assert typing.cast("str", donation.name) == "Test Donor"
-    assert typing.cast("float", donation.value == 50.0)
+    assert donation.name == "Test Donor"  # pyright: ignore[reportGeneralTypeIssues]
+    assert donation.value == 50.0  # pyright: ignore[reportGeneralTypeIssues]
+
     # Date is set when saved to database, not on object creation
     assert donation.date is None  # Before saving to DB
