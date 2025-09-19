@@ -19,22 +19,22 @@ class BeerConsumer:
         self.donate_url = donate_url
 
     async def on_message(self, message: QueueMessage) -> None:
-        logger.debug('%s process %s', __name__, message.data)
-        if message.data.event_type != 'DONATION' or not message.data.amount:
+        logger.debug("%s process %s", __name__, message.data)
+        if message.data.event_type != "DONATION" or not message.data.amount:
             return None
 
-        if message.data.currency != 'RUB':
+        if message.data.currency != "RUB":
             message.data.recal_amount(currencies=settings.currencies)
 
         stat_data = self._from_queue_event_to_bs(message.data)
 
         payload = {
-            'date': datetime.datetime.now().isoformat(),
-            'value': stat_data.get('value', 0),
-            'name': stat_data.get('name', ''),
+            "date": datetime.datetime.now().isoformat(),
+            "value": stat_data.get("value", 0),
+            "name": stat_data.get("name", ""),
         }
         headers = {
-            'Content-Type': 'application/json',
+            "Content-Type": "application/json",
         }
         async with aiohttp.ClientSession() as session:
             try:
@@ -44,12 +44,12 @@ class BeerConsumer:
                     await response.json()
                     return
             except ClientConnectorError:
-                logger.warning('cant connect to bs service')
+                logger.warning("cant connect to bs service")
 
     def _from_queue_event_to_bs(self, event: QueueEvent) -> dict[str, int | str | None]:
         message: dict[str, int | str | None] = {
-            'value': int(event.amount) if event.amount else 0,
-            'name': event.user_name,
+            "value": int(event.amount) if event.amount else 0,
+            "name": event.user_name,
         }
         return message
 
@@ -61,5 +61,5 @@ async def main() -> None:
         await queue.consumer(on_message=beer_consumer.on_message)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     asyncio.run(main())

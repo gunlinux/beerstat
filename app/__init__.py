@@ -10,7 +10,7 @@ from app.extensions import db
 from app.models import BeerDonation
 from app.utils import insert_donate, get_sum
 
-admin_ext = Admin(template_mode='bootstrap3')
+admin_ext = Admin(template_mode="bootstrap3")
 migrate_ext = Migrate()
 load_dotenv()
 
@@ -21,7 +21,7 @@ def create_app(testing=False):
         new_app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
     else:
         new_app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///mydatabase.db"
-    new_app.config["SECRET_KEY"] = os.getenv('SECRET_KEY', 'TypeMeIn')
+    new_app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "TypeMeIn")
     db.init_app(new_app)
     migrate_ext.init_app(new_app, db)
     admin_ext.init_app(new_app)
@@ -54,5 +54,3 @@ class MyModelView(ModelView):
 
 
 admin_ext.add_view(MyModelView(BeerDonation, db.session))
-
-
