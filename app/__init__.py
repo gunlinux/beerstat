@@ -6,8 +6,8 @@ from flask_admin.contrib.sqla import ModelView
 from flask_admin import Admin
 from flask_migrate import Migrate
 
-from app.extansions import db
-from app.models import Donations
+from app.extensions import db
+from app.models import BeerDonation
 from app.utils import insert_donate, get_sum
 
 admin_ext = Admin(template_mode='bootstrap3')
@@ -33,7 +33,7 @@ def create_app(testing=False):
             return abort(400)
         try:
             insert_donate(data, db.session)
-        except Exception as e:
+        except Exception:
             return abort(500)
         return jsonify({"message": "Success"})
 
@@ -53,6 +53,6 @@ class MyModelView(ModelView):
     column_hide_backrefs = False
 
 
-admin_ext.add_view(MyModelView(Donations, db.session))
+admin_ext.add_view(MyModelView(BeerDonation, db.session))
 
 

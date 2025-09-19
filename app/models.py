@@ -1,9 +1,9 @@
 from sqlalchemy import Column, Integer, String, DateTime, Float
 from datetime import datetime
-from app.extansions import db
+from app.extensions import db
 
 
-class Donations(db.Model):
+class BeerDonation(db.Model):
     id = Column(Integer, primary_key=True)
     name = Column(String(30))
     date = Column(DateTime, default=datetime.now)
