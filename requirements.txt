@@ -1,8 +1,0 @@
-flask_sqlalchemy
-Flask-Migrate
-datetime
-flask_admin
-pytest
-python-dotenv
-flask
-sqlalchemy
