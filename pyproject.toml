@@ -27,8 +27,9 @@ requeue = { git = "https://github.com/gunlinux/requeue" }
 
 
 [tool.pyright]
-ignore = ["tests"]
+ignore = ["migrations"]
 reportMissingTypeStubs = false
 reportUnannotatedClassAttribute = false
+reportCallIssue = false
 
 
