@@ -10,7 +10,7 @@ dependencies = [
     "flask-migrate>=4.1.0",
     "flask-sqlalchemy>=3.1.1",
     "python-dotenv>=1.1.1",
-    "requeue==0.2.4",
+    "requeue==3.0.0",
 ]
 
 

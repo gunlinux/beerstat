@@ -18,10 +18,11 @@ class BeerConsumer:
     def __init__(self, donate_url: str) -> None:
         self.donate_url = donate_url
 
-    async def on_message(self, message: QueueMessage) -> None:
+    async def on_message(self, message: QueueMessage) -> QueueMessage:
         logger.debug("%s process %s", __name__, message.data)
         if message.data.event_type != "DONATION" or not message.data.amount:
-            return None
+            message.finish()
+            return message
 
         if message.data.currency != "RUB":
             message.data.recal_amount(currencies=settings.currencies)
@@ -42,9 +43,11 @@ class BeerConsumer:
                     self.donate_url, json=payload, headers=headers
                 ) as response:
                     await response.json()
-                    return
+                    message.finish()
+                    return message
             except ClientConnectorError:
                 logger.warning("cant connect to bs service")
+        return message
 
     def _from_queue_event_to_bs(self, event: QueueEvent) -> dict[str, int | str | None]:
         message: dict[str, int | str | None] = {
