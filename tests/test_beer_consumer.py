@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, patch, MagicMock
 from aiohttp.client_exceptions import ClientConnectorError
 
 from beer_consumer import BeerConsumer
-from requeue.models import QueueMessage, QueueEvent
+from requeue.models import QueueMessage, QueueEvent, QueueMessageStatus
 
 
 @pytest.fixture
@@ -44,8 +44,8 @@ class TestBeerConsumer:
         )
         message = QueueMessage(event="test_event", data=event)
 
-        result = await beer_consumer.on_message(message)
-        assert result is None
+        result: QueueMessage = await beer_consumer.on_message(message)
+        assert result.status == QueueMessageStatus.WAITING
 
     @pytest.mark.asyncio
     async def test_on_message_donation_without_amount(self, beer_consumer):
@@ -56,7 +56,7 @@ class TestBeerConsumer:
         message = QueueMessage(event="test_event", data=event)
 
         result = await beer_consumer.on_message(message)
-        assert result is None
+        assert result is not None
 
     @pytest.mark.asyncio
     @patch("aiohttp.ClientSession.post")
@@ -121,7 +121,7 @@ class TestBeerConsumer:
 
         # Should not raise an exception
         result = await beer_consumer.on_message(sample_queue_message)
-        assert result is None
+        assert result is not None
 
     def test_from_queue_event_to_bs(self, beer_consumer, sample_queue_event):
         """Test _from_queue_event_to_bs method."""
