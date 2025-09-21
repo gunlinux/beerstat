@@ -5,9 +5,11 @@ After=network.target
 [Service]
 User=loki
 Group=loki
-WorkingDirectory=/home/loki/www/beerstat
-Environment="PATH=/home/loki/www/beerstat/venv/bin"
-ExecStart=/home/loki/www/beerstat/venv/bin/gunicorn --workers 3 --bind 127.0.0.1:6016 app:app
+WorkingDirectory=/home/loki/projects/bot/beerstat
+
+Environment="SQLALCHEMY_DATABASE_URI=sqlite:///home/loki/projects/bot/beerstat/beer.db"
+Environment="PATH=/home/loki/projects/bot/beerstat/.venv/bin"
+ExecStart=/home/loki/.local/bin/uv run gunicorn --workers 3 --bind 127.0.0.1:6016 app:app
 Restart=always
 
 [Install]

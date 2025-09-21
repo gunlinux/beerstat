@@ -4,8 +4,8 @@ After=network.target
 
 [Service]
 User=loki
-WorkingDirectory=/home/loki/projects/gunlinuxbot
-ExecStart=/home/loki/.local/bin/uv run /home/loki/projects/gunlinuxbot/beer_consumer.py
+WorkingDirectory=/home/loki/projects/bot/beerstat/
+ExecStart=/home/loki/.local/bin/uv run /home/loki/projects/bot/beerstat/beer_consumer.py
 Restart=always
 Environment="PATH=/usr/local/bin:/usr/bin:/bin:/home/loki/.local/bin"
 Environment="SSL_CERT_FILE=/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem"
