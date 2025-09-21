@@ -1,0 +1,17 @@
+[Unit]
+Description=Beer consumer
+After=network.target
+
+[Service]
+User=loki
+WorkingDirectory=/home/loki/projects/gunlinuxbot
+ExecStart=/home/loki/.local/bin/uv run /home/loki/projects/gunlinuxbot/beer_consumer.py
+Restart=always
+Environment="PATH=/usr/local/bin:/usr/bin:/bin:/home/loki/.local/bin"
+Environment="SSL_CERT_FILE=/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem"
+Environment="SSL_CERT_DIR=/dev/null"
+
+[Install]
+WantedBy=multi-user.target
+
+
