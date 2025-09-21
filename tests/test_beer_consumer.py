@@ -45,7 +45,7 @@ class TestBeerConsumer:
         message = QueueMessage(event="test_event", data=event)
 
         result: QueueMessage = await beer_consumer.on_message(message)
-        assert result.status == QueueMessageStatus.WAITING
+        assert result.status == QueueMessageStatus.FINISHED
 
     @pytest.mark.asyncio
     async def test_on_message_donation_without_amount(self, beer_consumer):
