@@ -1,15 +1,16 @@
 import os
 from typing import Any
-from dotenv import load_dotenv
 
-from flask import Flask, request, abort, jsonify, Response
-from flask_admin.contrib.sqla import ModelView
+from dotenv import load_dotenv
+from flask import Flask, Response, abort, jsonify, request
 from flask_admin import Admin
+from flask_admin.contrib.sqla import ModelView
 from flask_migrate import Migrate
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.extensions import db
 from app.models import BeerDonation
-from app.utils import insert_donate, get_sum
+from app.utils import get_sum, insert_donate
 
 admin_ext = Admin(template_mode="bootstrap3")
 migrate_ext = Migrate()
@@ -35,7 +36,7 @@ def create_app(testing: bool = False) -> Flask:
         try:
             insert_donate(data, db.session)  # pyright: ignore[reportArgumentType]
 
-        except Exception:
+        except (ValueError, SQLAlchemyError):
             return abort(500)
         return jsonify({"message": "Success"})
 

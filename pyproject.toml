@@ -12,7 +12,6 @@ dependencies = [
     "flask-sqlalchemy>=3.1.1",
     "gunicorn>=23.0.0",
     "python-dotenv>=1.1.1",
-    "requeue>=0.7.0",
 ]
 
 
@@ -23,9 +22,6 @@ dev = [
     "pytest-asyncio>=0.21.0",
     "ruff>=0.13.1",
 ]
-
-[tool.uv.sources]
-requeue = { git = "https://github.com/gunlinux/requeue" }
 
 [tool.pyright]
 ignore = ["migrations"]

@@ -19,7 +19,7 @@ test-dev:  ## Run tests
 
 .PHONY: lint
 lint:  ## Run linters
-	uv run ruff check
+	uvx ruff check
 
 .PHONY: fix
 fix:  ## Fix lint errors

@@ -1,8 +1,10 @@
-from app.models import BeerDonation
 from datetime import datetime
-from sqlalchemy import func
+
 import sqlalchemy.orm as sa_orm
+from sqlalchemy import func
 from sqlalchemy.orm import Session
+
+from app.models import BeerDonation
 
 
 def insert_donate(data: dict[str, object], session: sa_orm.scoped_session[Session]):

@@ -1,8 +1,9 @@
-from collections.abc import Generator
-from typing import Any
-import pytest
 import os
-from datetime import datetime
+from collections.abc import Generator
+from datetime import UTC, datetime
+from typing import Any
+
+import pytest
 from flask.testing import FlaskClient
 
 from app import create_app
@@ -30,7 +31,7 @@ def test_client() -> Generator[FlaskClient, Any, Any]:
 def test_donate_endpoint_success(test_client: FlaskClient) -> None:
     """Test successful donation creation"""
     donation_data = {
-        "date": datetime.now().isoformat(),
+        "date": datetime.now(UTC).isoformat(),
         "value": 100.5,
         "name": "Test Donor",
     }
@@ -71,7 +72,7 @@ def test_balance_endpoint_with_donations(test_client: FlaskClient) -> None:
     """Test balance endpoint with donations"""
     # Add a donation first
     donation_data = {
-        "date": datetime.now().isoformat(),
+        "date": datetime.now(UTC).isoformat(),
         "value": 50.0,
         "name": "Test Donor",
     }
@@ -94,9 +95,9 @@ def test_balance_endpoint_with_donations(test_client: FlaskClient) -> None:
 def test_multiple_donations(test_client: FlaskClient) -> None:
     """Test multiple donations and cumulative balance"""
     donations = [
-        {"date": datetime.now().isoformat(), "value": 25.0, "name": "Donor 1"},
-        {"date": datetime.now().isoformat(), "value": 75.5, "name": "Donor 2"},
-        {"date": datetime.now().isoformat(), "value": 100.0, "name": "Donor 3"},
+        {"date": datetime.now(UTC).isoformat(), "value": 25.0, "name": "Donor 1"},
+        {"date": datetime.now(UTC).isoformat(), "value": 75.5, "name": "Donor 2"},
+        {"date": datetime.now(UTC).isoformat(), "value": 100.0, "name": "Donor 3"},
     ]
 
     # Add all donations

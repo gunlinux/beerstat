@@ -1,6 +1,8 @@
 import typing
-from sqlalchemy import Column, Integer, String, DateTime, Float
 from datetime import datetime
+
+from sqlalchemy import Column, DateTime, Float, Integer, String
+
 from app.extensions import db
 
 

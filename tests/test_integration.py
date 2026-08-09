@@ -1,9 +1,10 @@
-from flask.testing import FlaskClient
-from collections.abc import Generator
-from typing import Any
-import pytest
 import os
-from datetime import datetime
+from collections.abc import Generator
+from datetime import UTC, datetime
+from typing import Any
+
+import pytest
+from flask.testing import FlaskClient
 
 from app import create_app
 from app.extensions import db
@@ -30,7 +31,7 @@ def test_donate_and_balance_flow(test_client: FlaskClient):
     """Test the complete flow of donating and checking balance, similar to the original test.py"""
     # Test donation
     donation_data = {
-        "date": datetime.now().isoformat(),
+        "date": datetime.now(UTC).isoformat(),
         "value": 100.5,
         "name": "Cher_cash",
     }
