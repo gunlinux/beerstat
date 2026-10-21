@@ -2,126 +2,144 @@
 
 ## Project Overview
 
-**BeerStat** is a Flask-based web application for tracking beer donations. It has two components:
-
-1. **Flask REST API** (`run.py`, `app/`) — `POST /donate` records a donation, `GET /balance` returns the cumulative total.
-2. **RabbitMQ consumer** (`beer_consumer.py`) — listens on the `bs_donats` queue (virtual host `gunlinux_bot`) for donation events from an upstream bot, transforms them via `BeerConsumer._from_queue_event_to_bs`, and POSTs them to the Flask API.
-
-The app is deployed on an Ubuntu VPS via systemd units (`services/`).
+**BeerStat consumer** is a Rust service that bridges RabbitMQ and the BeerStat API.
+It listens on the `bs_donats` queue (virtual host `gunlinux_bot`) for donation
+events from an upstream bot, keeps `DONATION` events with a non-zero amount, and
+POSTs them to the donate endpoint. The API and its database live in another
+project; this repository holds only the consumer.
 
 ## Tech Stack
 
-- **Python** 3.12+
-- **Package manager:** [uv](https://docs.astral.sh/uv/)
-- **Web framework:** Flask + Flask-SQLAlchemy + Flask-Migrate + Flask-Admin
-- **Database:** SQLite (in-memory for tests, file `instance/mydatabase.db` for dev, configurable via `SQLALCHEMY_DATABASE_URI`)
-- **Message queue:** RabbitMQ, consumed via [FastStream](https://faststream.airt.ai/) with manual ack
-- **Async HTTP:** aiohttp (consumer → API)
-- **Data validation:** Pydantic (queue message models)
-- **Production WSGI:** Gunicorn (3 workers, bound to `127.0.0.1:6016`)
-- **Testing:** pytest + pytest-asyncio
-- **Linting/formatting:** ruff
-- **Type checking:** pyright
+- **Rust** 2024 edition (min 1.85), binary crate `beerstat`
+- **AMQP:** [lapin](https://docs.rs/lapin) 3 over tokio
+- **Async HTTP:** reqwest (10 s timeout)
+- **Data validation:** serde / serde_json
+- **Logging:** tracing + tracing-subscriber (`RUST_LOG`)
+- **Config:** environment variables, optional `.env` via dotenvy
+- **TLS:** rustls on both sides (lapin and reqwest); no OpenSSL anywhere
+- **Deployment:** Docker image (`Dockerfile`) or systemd unit in `services/`
 
 ## Project Structure
 
 ```
 beerstat/
-├── app/
-│   ├── __init__.py      # Flask app factory, routes (/donate, /balance), admin setup
-│   ├── extensions.py    # SQLAlchemy instance
-│   ├── models.py        # BeerDonation model
-│   ├── settings.py      # env-var config (RABBIT_URL, BEER_URL, etc.)
-│   └── utils.py         # insert_donate(), get_sum()
-├── tests/
-│   ├── test_basics.py        # Flask endpoint unit tests
-│   ├── test_integration.py   # End-to-end donate-then-balance test
-│   └── test_beer_consumer.py # Consumer unit tests
-├── migrations/           # Alembic migrations (via Flask-Migrate)
-├── services/             # systemd unit files for deployment
-├── beer_consumer.py      # RabbitMQ consumer entry point
-├── run.py                # Flask dev server entry point
-├── pyproject.toml        # Project config + tool settings
-└── Makefile              # dev/test/lint/format/type-check targets
+├── src/
+│   ├── main.rs        # broker connection, consume loop, ack/reject, HTTP post
+│   ├── config.rs      # env config
+│   └── message.rs     # QueueMessage/QueueEvent models, Donation payload, rounding
+├── services/
+│   └── bot@beer_consumer.service   # runs target/release/beerstat
+├── .github/workflows/
+│   └── code-quality.yaml           # fmt, clippy, tests
+├── .env.example       # documented defaults; copy to .env
+├── Dockerfile         # two-stage: rust:1.96-alpine (musl, static) -> scratch
+├── .dockerignore
+├── Cargo.toml
+├── Cargo.lock         # committed, this is a binary
+└── Makefile
 ```
+
+There is no Python code, database, migrations or HTTP API in this repository
+anymore. `beer.db` / `instance/` may still be lying around locally from the old
+deployment; they are gitignored and must not be depended on.
 
 ## Building and Running
 
 ```bash
-# Install dependencies
-make dev
-
-# Create database + run migrations
-mkdir -p instance
-uv run flask db upgrade
-
-# Run Flask dev server
-uv run python run.py
-
-# Run RabbitMQ consumer
-uv run python beer_consumer.py
-
-# Run tests
-make test           # quiet
-make test-dev       # verbose with stdout
-
-# Run linting
-make lint
-
-# Run type checking
-make types
-
-# Auto-format + auto-fix lint issues
-make fix
-
-# Full CI check (tests + lint + format + types)
-make check
+make dev      # cargo build
+make run      # cargo run
+make test     # cargo test
+make check    # fmt + clippy + tests (same as CI)
+make fix      # fmt + clippy --fix
+make release  # cargo build --release
+make docker   # docker build -t beerstat:latest .
 ```
 
 ## Environment Variables
 
-Set via `.env` or the environment. See `app/settings.py`:
-
 | Variable | Default | Purpose |
 |---|---|---|
-| `REDIS_URL` | `redis://127.0.0.1/2` | Redis connection (currently unused in code) |
-| `RABBIT_URL` | `amqp://user:password@localhost:5672/` | RabbitMQ broker URL |
+| `RABBIT_URL` | `amqp://user:password@localhost:5672/gunlinux_bot` | Broker URI, virtual host in the path |
 | `BEER_URL` | `http://127.0.0.1:6016/donate` | Donate endpoint the consumer POSTs to |
-| `SECRET_KEY` | `TypeMeIn` | Flask secret key (set in production) |
-| `SQLALCHEMY_DATABASE_URI` | `sqlite:///mydatabase.db` | Database connection string |
-
-The consumer queue name is hardcoded as `bs_donats` in `app/settings.py` (`BEER_STAT`).
+| `BEER_STAT` | `bs_donats` | Queue name |
+| `RUST_LOG` | `info` | Log filter |
 
 ## Architecture Notes
 
-### Consumer → API flow
+### Consumer flow
 
 1. Upstream bot publishes donation events to RabbitMQ queue `bs_donats` (durable, with DLQ).
-2. `beer_consumer.py` subscribes via FastStream with `MANUAL` ack policy.
-3. `BeerConsumer.on_message()` filters for `event_type == "DONATION"` with non-zero amount, transforms via `_from_queue_event_to_bs` (rounds amount to int), and POSTs to the Flask `/donate` endpoint.
-4. `process_message()` wraps the handler: acks on success, rejects on exception (message goes to DLQ).
+2. `consume()` declares the queue with the dead-letter arguments and consumes
+   with manual acknowledgement.
+3. `handle()` parses `QueueMessage`, skips anything that is not a paid donation,
+   builds a `Donation`, and POSTs it to `BEER_URL`.
+4. `main()` acks on success and rejects without requeue on error (message goes to
+   the DLQ), then reconnects after 5 seconds if the broker connection dies.
 
-### Flask app
+### Message contract
 
-- Factory pattern: `create_app(testing=False)` in `app/__init__.py`.
-- `insert_donate()` creates a `BeerDonation` row and commits.
-- `get_sum()` returns `SUM(value)` or `None` if no donations exist.
-- Flask-Admin exposes the `BeerDonation` model at `/admin`.
+```json
+{
+  "event": "donation",
+  "source": "donationalerts",
+  "data": { "event_type": "DONATION", "user_name": "Cher_cash", "amount": 100.5 }
+}
+```
+
+`event` and `data.event_type` are required; `source` defaults to `""`; the other
+event fields are optional. Unknown keys are ignored on purpose (producers add
+provider metadata and raw payloads). `data.amount` is rounded half-to-even to an
+integer, and the POST body is `{ date, value, name }` with `name: null` when the
+producer sent no user name.
+
+## Gotchas
+
+- **Virtual host lives in `RABBIT_URL`.** lapin has no separate `virtualhost`
+  option, so there is deliberately no `RABBIT_VHOST`: use
+  `amqp://host:5672/gunlinux_bot`. A URI without a path silently means vhost
+  `/`; a stale `RABBIT_VHOST` now only triggers a startup warning.
+- **lapin 3 API differs from older examples.** Acks go through
+  `delivery.acker.ack(..)` / `.reject(..)`; `queue_declare` and `basic_consume`
+  take `&str`, not `Queue`; queue arguments need
+  `AMQPValue::LongString(..)`.
+- **The `dlq` exchange is not declared here** — it belongs to the producing side.
+  If it is missing, rejected messages are dropped by the broker.
+- **Reject means dead-letter, not retry.** Transient API outages therefore lose
+  the event to the DLQ; that matches the previous Python consumer.
+- **Rounding is half-to-even**, not `f64::round`, so amounts stay identical to
+  the historical data (`100.5 -> 100`).
+- **No OpenSSL.** Both reqwest (`rustls-tls`) and lapin (`rustls` default) avoid
+  it, which is why the runtime image only needs `ca-certificates`. Keep it that
+  way when adding dependencies.
+- **`SIGTERM` and Ctrl-C are both handled** via `shutdown_signal()`; `docker
+  stop` and `systemctl stop` do not have to wait for a timeout.
 
 ## Development Conventions
 
-- **Testing:** Tests live in `tests/`. In-memory SQLite is used (`create_app(testing=True)`). Async tests use `pytest-asyncio` with `asyncio_mode = "auto"`.
-- **Type hints:** Used throughout. pyright is configured with relaxed rules (see `[tool.pyright]` in `pyproject.toml`).
-- **Linting:** ruff with default rules. Format with `ruff format`, fix with `ruff check --fix`.
-- **Migrations:** Managed via Flask-Migrate/Alembic. After model changes, run `uv run flask db migrate -m "description"` then `uv run flask db upgrade`.
-- **Imports:** Type-checker pragmas (`# pyright: ignore[...]`) are used sparingly where SQLAlchemy dynamic attributes conflict with static analysis.
+- Tests are unit tests next to the code (`#[cfg(test)]`), ported from the old
+  Python consumer suite: filtering, transform, message parsing.
+  There is no live-broker integration test.
+- Keep changes consistent with rustfmt defaults and `clippy -D warnings`
+  (CI enforces both).
+- `Cargo.lock` is committed; do not regenerate it casually.
+- Schema/behaviour changes must stay compatible with the deployed API and the
+  upstream producer.
+
+## Deployment
+
+- **Docker:** `make docker`, then run with `--env-file .env` (or `-e` flags);
+  config is never baked into the image. The container runs as uid 10001.
+- **systemd:** `make release` and `services/bot@beer_consumer.service`, which
+  loads `.env` from the checkout directory.
+- Required runtime config is only `RABBIT_URL` and `BEER_URL`; everything else
+  has a default (see table above). It needs network access to the broker and
+  the API.
+- TLS trust comes from the system CA bundle: the Docker image installs
+  `ca-certificates`, while the systemd unit keeps the host's `SSL_CERT_FILE` /
+  `SSL_CERT_DIR` settings for the same purpose.
 
 ## CI/CD
 
 GitHub Actions (`.github/workflows/code-quality.yaml`) runs on every push:
-- `uv lock --locked` — verifies lock file is up to date
-- `ruff check` — linting
-- `ruff format --check` — formatting check
-- `pyright` — type checking
-
-Tests are **not** run in CI currently.
+`cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`.
+Tests do run in CI for this project, unlike the old Python workflow.
