@@ -28,7 +28,7 @@ Group=loki
 
 # `-` prefix: tolerated failure (container not running yet on first start).
 ExecStartPre=-/usr/bin/docker rm -f beerstat
-ExecStartPre=/usr/bin/docker image inspect beerstat:@IMAGE_TAG@
+ExecStartPre=/bin/sh -c 'docker image inspect beerstat:@IMAGE_TAG@ >/dev/null'
 ExecStart=/usr/bin/docker run --rm --name beerstat \
   --network host \
   --user @RUN_UID@ \
