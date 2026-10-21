@@ -15,9 +15,11 @@ use lapin::{
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
 
-use crate::message::QueueMessage;
+use crate::message::DonationPayload;
 
 const CONSUMER_TAG: &str = "beerstat";
+/// Dead-letter exchange owned by the producing side, not declared here.
+const DLQ_EXCHANGE: &str = "dlq";
 const RECONNECT_DELAY: Duration = Duration::from_secs(5);
 const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -38,6 +40,7 @@ async fn main() {
     }
     info!(
         queue = %config.queue,
+        dlq_routing_key = %config.dlq_routing_key,
         donate_url = %config.donate_url,
         "starting beerstat consumer"
     );
@@ -106,11 +109,11 @@ async fn consume(config: &config::Config, http: &reqwest::Client) -> Result<()> 
     let mut arguments = FieldTable::default();
     arguments.insert(
         "x-dead-letter-exchange".into(),
-        AMQPValue::LongString("dlq".into()),
+        AMQPValue::LongString(DLQ_EXCHANGE.into()),
     );
     arguments.insert(
         "x-dead-letter-routing-key".into(),
-        AMQPValue::LongString(format!("{}.dlq", config.queue).into()),
+        AMQPValue::LongString(config.dlq_routing_key.clone().into()),
     );
 
     channel
@@ -121,12 +124,15 @@ async fn consume(config: &config::Config, http: &reqwest::Client) -> Result<()> 
                 auto_delete: false,
                 ..Default::default()
             },
-            FieldTable::default(),
+            arguments,
         )
         .await
-        .context("declare queue")?;
+        .context(
+            "declare queue (an existing queue must have the same x-dead-letter-* arguments; \
+             the broker rejects a mismatching re-declare)",
+        )?;
 
-    info!(queue = %config.queue, "consuming");
+    info!(queue = %config.queue, dlq_routing_key = %config.dlq_routing_key, "consuming");
     let mut consumer: Consumer = channel
         .basic_consume(
             &config.queue,
@@ -141,7 +147,12 @@ async fn consume(config: &config::Config, http: &reqwest::Client) -> Result<()> 
         let delivery = delivery.context("receive delivery")?;
 
         if let Err(err) = handle(config, http, &delivery.data).await {
-            error!(error = %err, "worker function failed");
+            warn!(
+                error = %err,
+                exchange = DLQ_EXCHANGE,
+                routing_key = %config.dlq_routing_key,
+                "handle failed, dead-lettering message"
+            );
             delivery
                 .acker
                 .reject(BasicRejectOptions { requeue: false })
@@ -160,19 +171,15 @@ async fn consume(config: &config::Config, http: &reqwest::Client) -> Result<()> 
 }
 
 async fn handle(config: &config::Config, http: &reqwest::Client, payload: &[u8]) -> Result<()> {
-    let message: QueueMessage = serde_json::from_slice(payload).context("parse queue message")?;
-    debug!(
-        event = %message.event,
-        source = %message.source,
-        data = ?message.data,
-        "process event"
-    );
+    let payload: DonationPayload =
+        serde_json::from_slice(payload).context("parse donation payload")?;
+    debug!(payload = ?payload, "process donation");
 
-    if !message.data.is_donation() {
+    if !payload.is_donation() {
         return Ok(());
     }
 
-    let donation = message.data.to_donation(Utc::now());
+    let donation = payload.to_donation(Utc::now());
     http.post(&config.donate_url)
         .json(&donation)
         .send()
