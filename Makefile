@@ -1,27 +1,30 @@
-.PHONY: dev
-dev: ## Install dev dependencies
-	uv sync --dev
+.PHONY: dev run release test lint fmt fix check docker
 
-check: test lint fix types
-	echo "check"
+IMAGE ?= beerstat:latest
 
-types:
-	uv run pyright 
+dev: ## Build the consumer
+	cargo build
 
-.PHONY: test
-test:  ## Run tests
-	uv run pytest $(ARGS)
+run: ## Run the consumer
+	cargo run
 
-.PHONY: test-dev
-test-dev:  ## Run tests
-	uv run pytest -vv -s $(ARGS)
+release: ## Build optimized binary
+	cargo build --release
 
+test: ## Run tests
+	cargo test $(ARGS)
 
-.PHONY: lint
-lint:  ## Run linters
-	uv run ruff check
+lint: ## Run clippy
+	cargo clippy --all-targets -- -D warnings
 
-.PHONY: fix
-fix:  ## Fix lint errors
-	uv run ruff format
-	uv run ruff check --fix
+fmt: ## Check formatting
+	cargo fmt --check
+
+fix: ## Auto-format and apply clippy suggestions
+	cargo fmt
+	cargo clippy --all-targets --fix --allow-dirty --allow-staged
+
+check: fmt lint test ## Full CI check
+
+docker: ## Build container image
+	docker build -t $(IMAGE) .

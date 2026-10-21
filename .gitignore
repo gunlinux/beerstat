@@ -1,5 +1,4 @@
-instance/
-__pycache__
-.venv
-.idea/
+/target
+.env
 *.db
+.idea/
