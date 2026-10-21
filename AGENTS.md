@@ -3,10 +3,11 @@
 ## Project Overview
 
 **BeerStat consumer** is a Rust service that bridges RabbitMQ and the BeerStat API.
-It listens on the `bs_donats` queue (virtual host `gunlinux_bot`) for raw
-DonationAlerts donation payloads from an upstream bot, keeps paid donations, and
-POSTs them to the donate endpoint. The API and its database live in another
-project; this repository holds only the consumer.
+Locally the defaults are the `bs_donats` queue in virtual host `gunlinux_bot`;
+production consumes the `donations` queue of the `donation_alerts` broker
+(`127.0.0.1:5674`, vhost `prod`). It keeps paid donations and POSTs them to the
+donate endpoint. The API and its database live in another project; this
+repository holds only the consumer.
 
 ## Tech Stack
 
@@ -17,7 +18,8 @@ project; this repository holds only the consumer.
 - **Logging:** tracing + tracing-subscriber (`RUST_LOG`)
 - **Config:** environment variables, optional `.env` via dotenvy
 - **TLS:** rustls on both sides (lapin and reqwest); no OpenSSL anywhere
-- **Deployment:** Docker image (`Dockerfile`) or systemd unit in `services/`
+- **Deployment:** Docker image (`Dockerfile`) shipped by GitHub Actions over SSH
+  and run by the `deploy/beerstat.service` systemd unit
 
 ## Project Structure
 
@@ -27,10 +29,13 @@ beerstat/
 │   ├── main.rs        # broker connection, consume loop, ack/reject, HTTP post
 │   ├── config.rs      # env config
 │   └── message.rs     # DonationPayload parsing, Donation body, rounding
-├── services/
-│   └── bot@beer_consumer.service   # runs target/release/beerstat
-├── .github/workflows/
-│   └── code-quality.yaml           # fmt, clippy, tests
+├── deploy/
+│   └── beerstat.service            # runs the deployed image on the server
+├── .github/
+│   ├── deploy.sh                   # server-side deploy script (over SSH)
+│   └── workflows/
+│       ├── code-quality.yaml       # fmt, clippy, tests
+│       └── deploy.yaml             # build image, ship, deploy on master
 ├── .env.example       # documented defaults; copy to .env
 ├── Dockerfile         # two-stage: rust:1.96-alpine (musl, static) -> scratch
 ├── .dockerignore
@@ -62,21 +67,22 @@ make docker   # docker build -t beerstat:latest .
 | `RABBIT_URL` | `amqp://user:password@localhost:5672/gunlinux_bot` | Broker URI, virtual host in the path |
 | `BEER_URL` | `http://127.0.0.1:6016/donate` | Donate endpoint the consumer POSTs to |
 | `BEER_STAT` | `bs_donats` | Queue name |
-| `BEER_DLQ` | `<BEER_STAT>.dlq` | Dead-letter routing key on the `dlq` exchange |
+| `BEER_DLQ` | `<BEER_STAT>.dlq` | Dead-letter routing key; empty/`-`/`off`/`none` disables dead-letter arguments |
 | `RUST_LOG` | `info` | Log filter |
 
 ## Architecture Notes
 
 ### Consumer flow
 
-1. Upstream bot publishes DonationAlerts donation payloads to RabbitMQ queue
-   `bs_donats` (durable, with DLQ).
-2. `consume()` declares the queue with the dead-letter arguments and consumes
-   with manual acknowledgement.
+1. `donation_alerts` publishes raw DonationAlerts payloads to the `donations`
+   queue on the `prod` vhost (durable, declared without DLQ arguments).
+2. `consume()` declares the same queue (durable; dead-letter arguments only when
+   `BEER_DLQ` is set) and consumes with manual acknowledgement.
 3. `handle()` parses `DonationPayload`, skips anything that is not a paid
    donation, builds a `Donation`, and POSTs it to `BEER_URL`.
-4. `main()` acks on success and rejects without requeue on error (message goes to
-   the DLQ), then reconnects after 5 seconds if the broker connection dies.
+4. `main()` acks on success and rejects without requeue on error (dead-lettered
+   when a DLQ is configured), then reconnects after 5 seconds if the broker
+   connection dies.
 
 ### Message contract
 
@@ -117,12 +123,15 @@ time in UTC. The queue is expected to carry donations only, so there is no
   If it is missing, rejected messages are dropped by the broker.
 - **Reject means dead-letter, not retry.** Transient API outages therefore lose
   the event to the DLQ; that matches the previous Python consumer.
-- **DLQ is broker-side.** Failures are rejected without requeue, so
-  `x-dead-letter-exchange=dlq` plus `x-dead-letter-routing-key=<BEER_DLQ>`
-  routes them to `<queue>.dlq`. Neither the exchange nor that queue is declared
-  here; declare them on the producer side or the broker drops the message. An
-  existing queue with different arguments fails the re-declare
-  (`PRECONDITION_FAILED`).
+- **DLQ is broker-side and optional.** `x-dead-letter-exchange=dlq` plus
+  `x-dead-letter-routing-key=<BEER_DLQ>` routes failures to `<queue>.dlq`;
+  neither the exchange nor that queue is declared here. An existing queue with
+  different arguments fails the re-declare (`PRECONDITION_FAILED`), so the
+  production `donations` queue (declared by `donation_alerts` without those
+  arguments) requires `BEER_DLQ=-`.
+- **Same queue, same arguments as `donation_alerts`.** It re-declares `donations`
+  on every reconnect, so changing the queue arguments in beerstat would break
+  the producer, not just the consumer.
 - **Rounding is half-to-even**, not `f64::round`, so amounts stay identical to
   the historical data (`100.5 -> 100`).
 - **No OpenSSL.** Both reqwest (`rustls-tls`) and lapin (`rustls` default) avoid
@@ -144,19 +153,26 @@ time in UTC. The queue is expected to carry donations only, so there is no
 
 ## Deployment
 
-- **Docker:** `make docker`, then run with `--env-file .env` (or `-e` flags);
-  config is never baked into the image. The container runs as uid 10001.
-- **systemd:** `make release` and `services/bot@beer_consumer.service`, which
-  loads `.env` from the checkout directory.
-- Required runtime config is only `RABBIT_URL` and `BEER_URL`; everything else
-  has a default (see table above). It needs network access to the broker and
-  the API.
-- TLS trust comes from the system CA bundle: the Docker image installs
-  `ca-certificates`, while the systemd unit keeps the host's `SSL_CERT_FILE` /
-  `SSL_CERT_DIR` settings for the same purpose.
+- **Server:** gunlinux.ru, checkout `/home/loki/projects/bot/beerstat`, unit
+  `beerstat.service`, container `beerstat`. The container uses host networking
+  to reach the broker at `127.0.0.1:5674` and the API at `127.0.0.1:6016`.
+- **Image:** built in CI (`Dockerfile`: static musl binary on
+  `rust:1.96-alpine`, runtime `scratch` + CA bundle), shipped with
+  `docker save | docker load`, tagged with the commit short SHA. No registry.
+- **Config:** `.env` in the checkout, mounted at `/data`; it is gitignored and
+  survives `git reset --hard`. Required: `RABBIT_URL`, `BEER_URL`; production
+  also sets `BEER_STAT=donations` and `BEER_DLQ=-` to match the
+  `donation_alerts` queue declaration.
+- The deploy script disables the legacy `bot@beer_consumer.service` (the old
+  Python consumer) on its first run.
+- TLS trust comes from the CA bundle baked into the image.
+- **Docker Hub is not used.** A local `make docker` still works for manual runs.
 
 ## CI/CD
 
-GitHub Actions (`.github/workflows/code-quality.yaml`) runs on every push:
-`cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`.
-Tests do run in CI for this project, unlike the old Python workflow.
+GitHub Actions (`.github/workflows/code-quality.yaml`, workflow name
+`Rust code quality`) runs on every push: `cargo fmt --check`,
+`cargo clippy --all-targets -- -D warnings`, `cargo test`. When it passes on
+`master`, `deploy.yaml` builds the image, ships it to the server over SSH and
+runs `.github/deploy.sh` there. The only repository secret is
+`PRIVATE_KEY_SSH` (authorized for `loki@gunlinux.ru`, port 187).

@@ -1,0 +1,44 @@
+# beerstat — BeerStat consumer, Docker image deployment.
+#
+# Runs the image built by .github/workflows/deploy.yaml and shipped to the
+# server with `docker save | docker load`. @IMAGE_TAG@ is substituted with the
+# deploying commit's short SHA by .github/deploy.sh (sed), so the unit always
+# pins the exact deployed revision.
+#
+# --network host: both the RabbitMQ broker (127.0.0.1:5674) and the BeerStat
+# API (127.0.0.1:6016) listen on the host, so the container shares the host
+# network namespace.
+#
+# The deploy checkout is mounted at /data (the container's working directory)
+# so the binary finds `.env` there. The file stays on the host and survives
+# `git reset --hard`; --user keeps it readable by the deploying user.
+#
+# @RUN_UID@ is substituted by .github/deploy.sh with the deploying user's
+# `id -u:id -g`.
+
+[Unit]
+Description=BeerStat consumer — docker image
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+User=loki
+Group=loki
+
+# `-` prefix: tolerated failure (container not running yet on first start).
+ExecStartPre=-/usr/bin/docker rm -f beerstat
+ExecStartPre=/usr/bin/docker image inspect beerstat:@IMAGE_TAG@
+ExecStart=/usr/bin/docker run --rm --name beerstat \
+  --network host \
+  --user @RUN_UID@ \
+  -v /home/loki/projects/bot/beerstat:/data \
+  -w /data \
+  beerstat:@IMAGE_TAG@
+ExecStop=/usr/bin/docker stop beerstat
+Restart=on-failure
+RestartSec=10
+SyslogIdentifier=beerstat
+
+[Install]
+WantedBy=multi-user.target
