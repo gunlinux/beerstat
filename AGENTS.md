@@ -157,8 +157,9 @@ time in UTC. The queue is expected to carry donations only, so there is no
   `beerstat.service`, container `beerstat`. The container uses host networking
   to reach the broker at `127.0.0.1:5674` and the API at `127.0.0.1:6016`.
 - **Image:** built in CI (`Dockerfile`: static musl binary on
-  `rust:1.96-alpine`, runtime `scratch` + CA bundle), shipped with
-  `docker save | docker load`, tagged with the commit short SHA. No registry.
+  `rust:1.96-alpine`, runtime `scratch` + CA bundle) and pushed to Docker Hub as
+  `gunlinuxloki/beerstat:<short-sha>` (plus `latest`). The server pulls the
+  tagged image; the repository must stay public so no registry login is needed.
 - **Config:** `.env` in the checkout, mounted at `/data`; it is gitignored and
   survives `git reset --hard`. Required: `RABBIT_URL`, `BEER_URL`; production
   also sets `BEER_STAT=donations` and `BEER_DLQ=-` to match the
@@ -166,13 +167,17 @@ time in UTC. The queue is expected to carry donations only, so there is no
 - The deploy script disables the legacy `bot@beer_consumer.service` (the old
   Python consumer) on its first run.
 - TLS trust comes from the CA bundle baked into the image.
-- **Docker Hub is not used.** A local `make docker` still works for manual runs.
+- **Docker Hub:** `gunlinuxloki/beerstat`, pushed by CI with the repository
+  secrets `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN`. A local `make docker` still
+  works for manual runs.
 
 ## CI/CD
 
 GitHub Actions (`.github/workflows/code-quality.yaml`, workflow name
 `Rust code quality`) runs on every push: `cargo fmt --check`,
 `cargo clippy --all-targets -- -D warnings`, `cargo test`. When it passes on
-`master`, `deploy.yaml` builds the image, ships it to the server over SSH and
-runs `.github/deploy.sh` there. The only repository secret is
-`PRIVATE_KEY_SSH` (authorized for `loki@gunlinux.ru`, port 187).
+`master`, `deploy.yaml` builds and pushes the image to Docker Hub, then runs
+`.github/deploy.sh` on the server over SSH. Repository secrets:
+`DOCKERHUB_USERNAME`,
+`DOCKERHUB_TOKEN` and `PRIVATE_KEY_SSH` (authorized for `loki@gunlinux.ru`,
+port 187).

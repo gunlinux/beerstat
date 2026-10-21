@@ -3,14 +3,15 @@
 # beerstat — deploy the consumer container on gunlinux.ru.
 #
 # Runs ON the server, invoked by .github/workflows/deploy.yaml over SSH with
-# DEPLOY_TAG=<commit short SHA> exported. CI has already built the image and
-# piped it here with `docker save | docker load`, so this script only:
+# DEPLOY_TAG=<commit short SHA> exported. CI has already pushed the public
+# image to Docker Hub, so this script only:
 #
 #   1. fast-forwards the deploy checkout to origin/master,
 #   2. verifies the runtime `.env` exists (it is not in git),
-#   3. installs deploy/beerstat.service with the tag and run uid baked in,
-#   4. disables the legacy Python `bot@beer_consumer` unit,
-#   5. (re)starts the `beerstat` container.
+#   3. pulls the pushed image,
+#   4. installs deploy/beerstat.service with the tag and run uid baked in,
+#   5. disables the legacy Python `bot@beer_consumer` unit,
+#   6. (re)starts the `beerstat` container.
 #
 # Idempotent: safe to re-run.
 #
@@ -22,7 +23,7 @@ set -euo pipefail
 
 REPO_DIR="/home/loki/projects/bot/beerstat"
 BRANCH="master"
-IMAGE="beerstat"
+IMAGE="gunlinuxloki/beerstat"
 UNIT="beerstat"
 LEGACY_UNIT="bot@beer_consumer.service"
 
@@ -53,23 +54,22 @@ for key in RABBIT_URL BEER_URL; do
     fi
 done
 
-# --- 3. Install the unit with the tag and the run uid baked in ----------------
-if ! docker image inspect "$IMAGE:$TAG" >/dev/null 2>&1; then
-    echo "ERROR: image $IMAGE:$TAG is not loaded on this host — refusing to deploy." >&2
-    exit 1
-fi
+# --- 3. Pull the pushed image ------------------------------------------------
+# The Docker Hub repository is public, so the server needs no registry login.
+docker pull "$IMAGE:$TAG" >/dev/null
 
+# --- 4. Install the unit with the tag and the run uid baked in ----------------
 UID_GID="$(id -u):$(id -g)"
 sed -e "s|@IMAGE_TAG@|$TAG|g" -e "s|@RUN_UID@|$UID_GID|g" deploy/beerstat.service \
     | sudo tee "/etc/systemd/system/$UNIT.service" >/dev/null
 sudo systemctl daemon-reload
 
-# --- 4. Retire the old Python consumer ---------------------------------------
+# --- 5. Retire the old Python consumer ---------------------------------------
 if systemctl list-unit-files "$LEGACY_UNIT" --no-legend 2>/dev/null | grep -q .; then
     sudo systemctl disable --now "$LEGACY_UNIT" >/dev/null 2>&1 || true
 fi
 
-# --- 5. (Re)start the consumer ------------------------------------------------
+# --- 6. (Re)start the consumer ------------------------------------------------
 sudo systemctl enable "$UNIT.service" >/dev/null
 
 # Restart when the running image differs from the deployed tag; `start` is a
