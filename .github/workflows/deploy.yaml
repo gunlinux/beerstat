@@ -1,0 +1,75 @@
+name: Deploy to Server
+
+# Fires when the "Rust code quality" workflow passes on master: build the
+# Docker image on the runner, ship it to gunlinux.ru over SSH with
+# `docker save | docker load` (the image is tiny — scratch + one static
+# binary), then run .github/deploy.sh there.
+#
+# No registry and no Docker Hub credentials are involved; the only secret is
+# PRIVATE_KEY_SSH, an SSH key authorized for loki@gunlinux.ru.
+
+on:
+  workflow_run:
+    workflows: ["Rust code quality"]
+    branches: [master]
+    types:
+      - completed
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+env:
+  IMAGE: beerstat
+
+jobs:
+  build-and-deploy:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout the tested commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Compute image tag
+        id: tag
+        env:
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: echo "sha7=${RUN_SHA:0:7}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: ${{ env.IMAGE }}:${{ steps.tag.outputs.sha7 }}
+
+      - name: Set up SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.PRIVATE_KEY_SSH }}
+
+      # Port 187 is the server's non-standard SSH port. Ship the image first:
+      # deploy.sh refuses to install a unit whose tag is not loaded locally.
+      - name: Ship image to server
+        env:
+          DEPLOY_TAG: ${{ steps.tag.outputs.sha7 }}
+        run: |
+          docker save "$IMAGE:$DEPLOY_TAG" | gzip -1 \
+            | ssh -o StrictHostKeyChecking=no -p 187 "loki@gunlinux.ru" \
+                'gunzip | docker load'
+
+      - name: Deploy to server
+        env:
+          DEPLOY_TAG: ${{ steps.tag.outputs.sha7 }}
+        run: |
+          ssh -o StrictHostKeyChecking=no -p 187 "loki@gunlinux.ru" \
+            "DEPLOY_TAG=$DEPLOY_TAG bash -s" < .github/deploy.sh

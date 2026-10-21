@@ -1,8 +1,9 @@
 # BeerStat consumer
 
-RabbitMQ consumer for beer donations. It subscribes to the `bs_donats` queue
-(virtual host `gunlinux_bot`), keeps paid donations and forwards them to the
-BeerStat API:
+RabbitMQ consumer for beer donations. Locally it defaults to the `bs_donats`
+queue in virtual host `gunlinux_bot`; production consumes the `donations` queue
+of the `donation_alerts` broker (vhost `prod`). It keeps paid donations and
+forwards them to the BeerStat API:
 
 ```json
 { "date": "2026-10-11T18:29:48.123456+00:00", "value": 333, "name": "loki", "commentary": "ahaha" }
@@ -19,8 +20,8 @@ consumer, so it needs a reachable `/donate` endpoint to be useful.
 ## Requirements
 
 - Rust 1.85+ (edition 2024; `rust-version` is set in `Cargo.toml`)
-- A running RabbitMQ broker with the `gunlinux_bot` virtual host and the `dlq`
-  exchange used for dead-lettering
+- A running RabbitMQ broker; production reuses the `donation_alerts` broker
+  (`127.0.0.1:5674`, virtual host `prod`) and consumes its `donations` queue
 - A running BeerStat API (default `http://127.0.0.1:6016/donate`)
 
 ## Configuration
@@ -33,7 +34,7 @@ Read from the environment, or from a `.env` file in the working directory
 | `RABBIT_URL` | `amqp://user:password@localhost:5672/gunlinux_bot` | Broker URI, virtual host in the path |
 | `BEER_URL` | `http://127.0.0.1:6016/donate` | Donate endpoint to POST to |
 | `BEER_STAT` | `bs_donats` | Queue name |
-| `BEER_DLQ` | `<BEER_STAT>.dlq` | Dead-letter routing key on the `dlq` exchange |
+| `BEER_DLQ` | `<BEER_STAT>.dlq` | Dead-letter routing key; empty/`-`/`off`/`none` disables dead-letter arguments |
 | `RUST_LOG` | `info` | Log filter (`debug` logs each parsed event) |
 
 The virtual host is part of the URI path, so
@@ -51,7 +52,43 @@ make release  # optimized binary in target/release/beerstat
 
 ## Deployment
 
-### Docker
+CI is the deployment: `.github/workflows/code-quality.yaml` runs on every push;
+when it passes on `master`, `.github/workflows/deploy.yaml` builds the Docker
+image, ships it to gunlinux.ru over SSH (`docker save | docker load`) and runs
+`.github/deploy.sh` there. The only secret is `PRIVATE_KEY_SSH`, an SSH key
+authorized for `loki@gunlinux.ru`; there is no registry and no Docker Hub
+credentials.
+
+On the server:
+
+| Item | Value |
+|---|---|
+| checkout | `/home/loki/projects/bot/beerstat` (`git reset --hard origin/master`) |
+| runtime config | `.env` in that checkout, gitignored, survives deploys |
+| image | `beerstat:<short-sha>` |
+| unit / container | `beerstat.service` / `beerstat` |
+| logs | `sudo journalctl -u beerstat -f` |
+
+The first deploy disables the legacy Python `bot@beer_consumer.service`. The
+container uses host networking because the broker and the API listen on
+`127.0.0.1`. It runs as the deploying user (`--user $(id -u):$(id -g)`) so the
+mounted `.env` stays readable.
+
+A production `.env` reuses the `donation_alerts` broker and queue:
+
+```dotenv
+RABBIT_URL=amqp://donate_consumer:password@127.0.0.1:5674/prod
+BEER_URL=http://127.0.0.1:6016/donate
+BEER_STAT=donations
+BEER_DLQ=-
+RUST_LOG=info
+```
+
+`BEER_DLQ=-` is required here: `donation_alerts` declares `donations` without
+`x-dead-letter-*` arguments, and a mismatching re-declare fails with
+`PRECONDITION_FAILED`.
+
+### Local Docker
 
 ```bash
 make docker                      # docker build -t beerstat:latest .
@@ -63,48 +100,23 @@ docker run -d --name beerstat \
 
 The image is a two-stage build: a static musl binary (rustls, no OpenSSL) is
 compiled on `rust:1.96-alpine` and the runtime is `scratch` plus a CA bundle and
-that binary. There is no shell, libc or package manager, and it runs as uid/gid
-10001. Config comes from `--env-file`/`-e`; a `.env` file inside the image is
-neither copied nor needed.
-
-Every variable above has a default, so the only ones a real deployment must set
-are `RABBIT_URL` and `BEER_URL`:
-
-```bash
-docker run -d --name beerstat --restart unless-stopped \
-  -e RABBIT_URL='amqp://user:pass@rabbit:5672/gunlinux_bot' \
-  -e BEER_URL='http://bs:6016/donate' \
-  -e RUST_LOG=info \
-  beerstat:latest
-```
-
+that binary. There is no shell, libc or package manager. Config comes from
+`--env-file`/`-e`; a `.env` file inside the image is neither copied nor needed.
 `SIGTERM` (docker stop, systemd) shuts the consumer down like Ctrl-C.
-
-### systemd
-
-```bash
-make release
-sudo cp services/bot@beer_consumer.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now 'bot@beer_consumer.service'
-```
-
-The unit runs `target/release/beerstat` from `/home/loki/projects/bot/beerstat/`
-and loads `.env` from there. Adjust paths if the checkout lives elsewhere.
 
 ## Behaviour
 
-- The queue is declared durable, not auto-deleted, with
-  `x-dead-letter-exchange=dlq` and `x-dead-letter-routing-key=<BEER_DLQ>`.
-  The exchange and the target queue (`bs_donats.dlq` by default) are not
-  declared here: they must already exist on the producer side, otherwise the
-  broker drops the dead-lettered message. A queue that already exists with
-  different arguments makes the declare fail (`PRECONDITION_FAILED`), so
-  recreate it or keep `BEER_DLQ` matching its routing key.
+- The queue is declared durable, not auto-deleted. By default it also carries
+  `x-dead-letter-exchange=dlq` and `x-dead-letter-routing-key=<BEER_DLQ>`; the
+  exchange and target queue are not declared here, so they must exist on the
+  producer side or the broker drops the dead-lettered message. With
+  `BEER_DLQ=-` no dead-letter arguments are declared at all, which is what a
+  queue shared with another producer requires.
 - A failed POST (network error or HTTP error status) rejects the message
-  without requeue, so the broker dead-letters it to `bs_donats.dlq`.
+  without requeue: it is dead-lettered when a DLQ is configured, otherwise the
+  broker drops it.
 - Donations with a zero, negative or missing `amount_in_user_currency` are
-  acked and ignored. A payload that fails to parse is rejected to the DLQ.
+  acked and ignored. A payload that fails to parse is rejected without requeue.
 - Amounts are rounded half-to-even, matching the previous Python consumer.
 - An empty `name` is sent as `Anonym`; an empty `message` is sent as
   `commentary: null`.

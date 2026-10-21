@@ -40,7 +40,7 @@ async fn main() {
     }
     info!(
         queue = %config.queue,
-        dlq_routing_key = %config.dlq_routing_key,
+        dlq_routing_key = ?config.dlq_routing_key,
         donate_url = %config.donate_url,
         "starting beerstat consumer"
     );
@@ -107,14 +107,16 @@ async fn consume(config: &config::Config, http: &reqwest::Client) -> Result<()> 
     let channel = connection.create_channel().await.context("open channel")?;
 
     let mut arguments = FieldTable::default();
-    arguments.insert(
-        "x-dead-letter-exchange".into(),
-        AMQPValue::LongString(DLQ_EXCHANGE.into()),
-    );
-    arguments.insert(
-        "x-dead-letter-routing-key".into(),
-        AMQPValue::LongString(config.dlq_routing_key.clone().into()),
-    );
+    if let Some(routing_key) = &config.dlq_routing_key {
+        arguments.insert(
+            "x-dead-letter-exchange".into(),
+            AMQPValue::LongString(DLQ_EXCHANGE.into()),
+        );
+        arguments.insert(
+            "x-dead-letter-routing-key".into(),
+            AMQPValue::LongString(routing_key.clone().into()),
+        );
+    }
 
     channel
         .queue_declare(
@@ -132,7 +134,7 @@ async fn consume(config: &config::Config, http: &reqwest::Client) -> Result<()> 
              the broker rejects a mismatching re-declare)",
         )?;
 
-    info!(queue = %config.queue, dlq_routing_key = %config.dlq_routing_key, "consuming");
+    info!(queue = %config.queue, dlq_routing_key = ?config.dlq_routing_key, "consuming");
     let mut consumer: Consumer = channel
         .basic_consume(
             &config.queue,
@@ -147,12 +149,16 @@ async fn consume(config: &config::Config, http: &reqwest::Client) -> Result<()> 
         let delivery = delivery.context("receive delivery")?;
 
         if let Err(err) = handle(config, http, &delivery.data).await {
-            warn!(
-                error = %err,
-                exchange = DLQ_EXCHANGE,
-                routing_key = %config.dlq_routing_key,
-                "handle failed, dead-lettering message"
-            );
+            if let Some(routing_key) = &config.dlq_routing_key {
+                warn!(
+                    error = %err,
+                    exchange = DLQ_EXCHANGE,
+                    routing_key = %routing_key,
+                    "handle failed, dead-lettering message"
+                );
+            } else {
+                warn!(error = %err, "handle failed, rejecting message (no DLQ configured)");
+            }
             delivery
                 .acker
                 .reject(BasicRejectOptions { requeue: false })
