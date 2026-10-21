@@ -1,9 +1,9 @@
 # beerstat — BeerStat consumer, Docker image deployment.
 #
-# Runs the image built by .github/workflows/deploy.yaml and shipped to the
-# server with `docker save | docker load`. @IMAGE_TAG@ is substituted with the
-# deploying commit's short SHA by .github/deploy.sh (sed), so the unit always
-# pins the exact deployed revision.
+# Runs the public Docker Hub image gunlinuxloki/beerstat. @IMAGE_TAG@ is
+# substituted with the deploying commit's short SHA by .github/deploy.sh (sed),
+# so the unit always pins the exact deployed revision; rollback is a restart
+# with a previous tag.
 #
 # --network host: both the RabbitMQ broker (127.0.0.1:5674) and the BeerStat
 # API (127.0.0.1:6016) listen on the host, so the container shares the host
@@ -28,13 +28,13 @@ Group=loki
 
 # `-` prefix: tolerated failure (container not running yet on first start).
 ExecStartPre=-/usr/bin/docker rm -f beerstat
-ExecStartPre=/bin/sh -c 'docker image inspect beerstat:@IMAGE_TAG@ >/dev/null'
+ExecStartPre=/usr/bin/docker pull gunlinuxloki/beerstat:@IMAGE_TAG@
 ExecStart=/usr/bin/docker run --rm --name beerstat \
   --network host \
   --user @RUN_UID@ \
   -v /home/loki/projects/bot/beerstat:/data \
   -w /data \
-  beerstat:@IMAGE_TAG@
+  gunlinuxloki/beerstat:@IMAGE_TAG@
 ExecStop=/usr/bin/docker stop beerstat
 Restart=on-failure
 RestartSec=10

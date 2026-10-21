@@ -54,10 +54,12 @@ make release  # optimized binary in target/release/beerstat
 
 CI is the deployment: `.github/workflows/code-quality.yaml` runs on every push;
 when it passes on `master`, `.github/workflows/deploy.yaml` builds the Docker
-image, ships it to gunlinux.ru over SSH (`docker save | docker load`) and runs
-`.github/deploy.sh` there. The only secret is `PRIVATE_KEY_SSH`, an SSH key
-authorized for `loki@gunlinux.ru`; there is no registry and no Docker Hub
-credentials.
+image, pushes it to Docker Hub as `gunlinuxloki/beerstat:<short-sha>` (plus
+`latest`) and runs `.github/deploy.sh` on gunlinux.ru over SSH, which pulls that
+tag and restarts the unit.
+
+Repository secrets: `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` and
+`PRIVATE_KEY_SSH` (an SSH key authorized for `loki@gunlinux.ru`, port 187).
 
 On the server:
 
@@ -65,7 +67,7 @@ On the server:
 |---|---|
 | checkout | `/home/loki/projects/bot/beerstat` (`git reset --hard origin/master`) |
 | runtime config | `.env` in that checkout, gitignored, survives deploys |
-| image | `beerstat:<short-sha>` |
+| image | `gunlinuxloki/beerstat:<short-sha>` (public Docker Hub) |
 | unit / container | `beerstat.service` / `beerstat` |
 | logs | `sudo journalctl -u beerstat -f` |
 
