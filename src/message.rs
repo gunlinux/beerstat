@@ -12,7 +12,7 @@ pub const ANONYMOUS_NAME: &str = "Anonym";
 pub struct DonationPayload {
     /// Donor display name; empty or missing when the donor has none.
     #[serde(default)]
-    pub name: Option<String>,
+    pub username: Option<String>,
     /// Amount in the donor's currency; sent as an int or a float.
     #[serde(default)]
     pub amount_in_user_currency: Option<f64>,
@@ -49,7 +49,7 @@ impl DonationPayload {
     /// An empty donor name becomes [`ANONYMOUS_NAME`], because the API requires
     /// a non-empty name.
     fn donor_name(&self) -> String {
-        match self.name.as_deref().map(str::trim) {
+        match self.username.as_deref().map(str::trim) {
             Some(name) if !name.is_empty() => name.to_string(),
             _ => ANONYMOUS_NAME.to_string(),
         }
@@ -86,7 +86,7 @@ mod tests {
 
     #[test]
     fn converts_amount_in_user_currency_to_int() {
-        let payload = parse(r#"{"name":"test_user","amount_in_user_currency":100.5}"#);
+        let payload = parse(r#"{"username":"test_user","amount_in_user_currency":100.5}"#);
         assert_eq!(
             donation(&payload),
             Donation {
@@ -129,9 +129,9 @@ mod tests {
     #[test]
     fn empty_name_becomes_anonym() {
         for payload in [
-            parse(r#"{"name":null,"amount_in_user_currency":10}"#),
-            parse(r#"{"name":"","amount_in_user_currency":10}"#),
-            parse(r#"{"name":"   ","amount_in_user_currency":10}"#),
+            parse(r#"{"username":null,"amount_in_user_currency":10}"#),
+            parse(r#"{"username":"","amount_in_user_currency":10}"#),
+            parse(r#"{"username":"   ","amount_in_user_currency":10}"#),
             parse(r#"{"amount_in_user_currency":10}"#),
         ] {
             assert_eq!(donation(&payload).name, ANONYMOUS_NAME);
@@ -140,7 +140,7 @@ mod tests {
 
     #[test]
     fn keeps_non_empty_name() {
-        let payload = parse(r#"{"name":" loki ","amount_in_user_currency":10}"#);
+        let payload = parse(r#"{"username":" loki ","amount_in_user_currency":10}"#);
         assert_eq!(donation(&payload).name, "loki");
     }
 
@@ -175,7 +175,7 @@ mod tests {
             Donation {
                 date: "2026-10-20T19:27:31.123456+00:00".into(),
                 value: 333,
-                name: "Donations".into(),
+                name: "loki".into(),
                 commentary: Some("ahaha".into()),
             }
         );
