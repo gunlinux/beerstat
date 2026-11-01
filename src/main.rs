@@ -8,8 +8,12 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use futures_util::StreamExt;
 use lapin::{
-    Connection, ConnectionProperties, Consumer,
-    options::{BasicAckOptions, BasicConsumeOptions, BasicRejectOptions, QueueDeclareOptions},
+    BasicProperties, Channel, Connection, ConnectionProperties, Consumer,
+    options::{
+        BasicAckOptions, BasicConsumeOptions, BasicPublishOptions, BasicRejectOptions,
+        ConfirmSelectOptions, QueueDeclareOptions,
+    },
+    publisher_confirm::Confirmation,
     types::{AMQPValue, FieldTable},
 };
 use tracing::{debug, error, info, warn};
@@ -42,6 +46,7 @@ async fn main() {
         queue = %config.queue,
         dlq_routing_key = ?config.dlq_routing_key,
         donate_url = %config.donate_url,
+        twitch_queue = ?config.twitch_queue,
         "starting beerstat consumer"
     );
 
@@ -134,6 +139,11 @@ async fn consume(config: &config::Config, http: &reqwest::Client) -> Result<()> 
              the broker rejects a mismatching re-declare)",
         )?;
 
+    channel
+        .confirm_select(ConfirmSelectOptions::default())
+        .await
+        .context("enable publisher confirms")?;
+
     info!(queue = %config.queue, dlq_routing_key = ?config.dlq_routing_key, "consuming");
     let mut consumer: Consumer = channel
         .basic_consume(
@@ -148,7 +158,7 @@ async fn consume(config: &config::Config, http: &reqwest::Client) -> Result<()> 
     while let Some(delivery) = consumer.next().await {
         let delivery = delivery.context("receive delivery")?;
 
-        if let Err(err) = handle(config, http, &delivery.data).await {
+        if let Err(err) = handle(config, http, &channel, &delivery.data).await {
             if let Some(routing_key) = &config.dlq_routing_key {
                 warn!(
                     error = %err,
@@ -176,7 +186,12 @@ async fn consume(config: &config::Config, http: &reqwest::Client) -> Result<()> 
     Ok(())
 }
 
-async fn handle(config: &config::Config, http: &reqwest::Client, payload: &[u8]) -> Result<()> {
+async fn handle(
+    config: &config::Config,
+    http: &reqwest::Client,
+    channel: &Channel,
+    payload: &[u8],
+) -> Result<()> {
     let payload: DonationPayload =
         serde_json::from_slice(payload).context("parse donation payload")?;
     debug!(payload = ?payload, "process donation");
@@ -194,5 +209,66 @@ async fn handle(config: &config::Config, http: &reqwest::Client, payload: &[u8])
         .error_for_status()
         .context("donate endpoint returned an error")?;
 
+    if let Some(queue) = &config.twitch_queue {
+        announce(config, channel, &payload, queue).await;
+    }
+
     Ok(())
+}
+
+/// Drop a chat announcement into the Twitch sender's queue. The donation is
+/// already recorded at this point, so failures are logged and swallowed rather
+/// than dead-lettering the message the API accepted.
+async fn announce(
+    config: &config::Config,
+    channel: &Channel,
+    payload: &DonationPayload,
+    queue: &str,
+) {
+    let message = payload.to_chat_message(&config.twitch_admin);
+    let body = match serde_json::to_vec(&message) {
+        Ok(body) => body,
+        Err(err) => {
+            warn!(error = %err, "serialize twitch announcement");
+            return;
+        }
+    };
+
+    let confirmation = channel
+        .basic_publish(
+            // Default exchange: the routing key is the queue name, so the
+            // announcement lands in the sender's queue whatever exchange
+            // bindings exist.
+            "",
+            queue,
+            BasicPublishOptions {
+                mandatory: true,
+                ..Default::default()
+            },
+            &body,
+            BasicProperties::default().with_content_type("application/json".into()),
+        )
+        .await;
+
+    match confirmation {
+        Ok(confirmation) => match confirmation.await {
+            Ok(Confirmation::Ack(returned) | Confirmation::Nack(returned)) => match returned {
+                Some(returned) => warn!(
+                    queue,
+                    reply_code = returned.reply_code,
+                    reply_text = %returned.reply_text,
+                    "twitch announcement not routed; is the queue declared?"
+                ),
+                None => debug!(queue, "twitch announcement published"),
+            },
+            Ok(Confirmation::NotRequested) => {
+                warn!(
+                    queue,
+                    "publisher confirms are off, announcement unconfirmed"
+                )
+            }
+            Err(err) => warn!(error = %err, queue, "twitch announcement not confirmed"),
+        },
+        Err(err) => warn!(error = %err, queue, "publish twitch announcement failed"),
+    }
 }

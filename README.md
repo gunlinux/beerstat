@@ -14,6 +14,16 @@ unknown fields are ignored. `amount_in_user_currency` becomes `value`, an empty
 `name` becomes `Anonym`, and a missing or blank `message` becomes
 `commentary: null`.
 
+After the API accepts a donation the consumer also drops an announcement into
+the `twitch_out` queue, where the Twitch chat sender (retwitch) picks it up:
+
+```json
+{ "event": "mssg", "source": "donations_alerts", "data": { "event_type": "mssg", "message": "@gunlinux loki пожертвовал 333 RUB | ahaha" } }
+```
+
+Announcements are best effort: if the publish fails the donation stays recorded
+and the queue message is still acked.
+
 The API and its database live in another project: this repository holds only the
 consumer, so it needs a reachable `/donate` endpoint to be useful.
 
@@ -35,6 +45,8 @@ Read from the environment, or from a `.env` file in the working directory
 | `BEER_URL` | `http://127.0.0.1:6016/donate` | Donate endpoint to POST to |
 | `BEER_STAT` | `bs_donats` | Queue name |
 | `BEER_DLQ` | `<BEER_STAT>.dlq` | Dead-letter routing key; empty/`-`/`off`/`none` disables dead-letter arguments |
+| `TWITCH_OUT` | `twitch_out` | Chat queue announcements are published to; empty/`-`/`off`/`none` disables them |
+| `TWITCH_ADMIN` | `gunlinux` | Twitch account pinged in the announcement |
 | `RUST_LOG` | `info` | Log filter (`debug` logs each parsed event) |
 
 The virtual host is part of the URI path, so
@@ -122,6 +134,9 @@ that binary. There is no shell, libc or package manager. Config comes from
 - Amounts are rounded half-to-even, matching the previous Python consumer.
 - An empty `name` is sent as `Anonym`; an empty `message` is sent as
   `commentary: null`.
+- A recorded donation is announced on `twitch_out` through the default exchange
+  (routing key = queue name), with publisher confirms and `mandatory` so a
+  missing queue is logged. Publish failures never reject the donation.
 - On broker errors the consumer logs, then reconnects after 5 seconds. Ctrl-C
   exits; a message that was in flight is left unacked and redelivered by the
   broker.

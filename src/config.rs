@@ -3,6 +3,8 @@ use std::env;
 const DEFAULT_RABBIT_URL: &str = "amqp://user:password@localhost:5672/gunlinux_bot";
 const DEFAULT_DONATE_URL: &str = "http://127.0.0.1:6016/donate";
 const DEFAULT_QUEUE: &str = "bs_donats";
+const DEFAULT_TWITCH_OUT: &str = "twitch_out";
+const DEFAULT_TWITCH_ADMIN: &str = "gunlinux";
 const DLQ_SUFFIX: &str = ".dlq";
 
 #[derive(Debug, Clone)]
@@ -16,6 +18,11 @@ pub struct Config {
     /// arguments, which a queue shared with a producer that never declared them
     /// requires (a mismatching re-declare fails with `PRECONDITION_FAILED`).
     pub dlq_routing_key: Option<String>,
+    /// Queue the Twitch chat sender (retwitch) consumes; defaults to
+    /// `twitch_out`. `None` disables donation announcements.
+    pub twitch_queue: Option<String>,
+    /// Twitch account pinged in the announcement.
+    pub twitch_admin: String,
 }
 
 impl Config {
@@ -27,12 +34,28 @@ impl Config {
             donate_url: env_or("BEER_URL", DEFAULT_DONATE_URL),
             queue,
             dlq_routing_key,
+            twitch_queue: optional_name(env::var("TWITCH_OUT").ok(), DEFAULT_TWITCH_OUT),
+            twitch_admin: env_or("TWITCH_ADMIN", DEFAULT_TWITCH_ADMIN),
         }
     }
 }
 
 fn env_or(key: &str, default: &str) -> String {
     env::var(key).unwrap_or_else(|_| default.to_string())
+}
+
+/// An unset variable means `default`; an explicit empty value or
+/// `-`/`off`/`none` disables the feature.
+fn optional_name(value: Option<String>, default: &str) -> Option<String> {
+    let value = value.map_or_else(|| default.to_string(), |value| value.trim().to_string());
+    (!is_disabled(&value)).then_some(value)
+}
+
+fn is_disabled(value: &str) -> bool {
+    value.is_empty()
+        || value == "-"
+        || value.eq_ignore_ascii_case("off")
+        || value.eq_ignore_ascii_case("none")
 }
 
 /// `<queue>.dlq` when unset; an explicit empty value or `-`/`off`/`none`
@@ -42,19 +65,12 @@ fn dlq_routing_key(value: Option<String>, queue: &str) -> Option<String> {
         Some(value) => value.trim().to_string(),
         None => return Some(format!("{queue}{DLQ_SUFFIX}")),
     };
-    if value.is_empty()
-        || value == "-"
-        || value.eq_ignore_ascii_case("off")
-        || value.eq_ignore_ascii_case("none")
-    {
-        return None;
-    }
-    Some(value)
+    (!is_disabled(&value)).then_some(value)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::dlq_routing_key;
+    use super::{dlq_routing_key, optional_name};
 
     #[test]
     fn dlq_defaults_to_queue_suffix() {
@@ -76,6 +92,25 @@ mod tests {
     fn empty_or_off_disables_dlq() {
         for value in ["", "  ", "-", "off", "NONE"] {
             assert_eq!(dlq_routing_key(Some(value.into()), "donations"), None);
+        }
+    }
+
+    #[test]
+    fn twitch_queue_defaults_to_twitch_out() {
+        assert_eq!(
+            optional_name(None, "twitch_out").as_deref(),
+            Some("twitch_out")
+        );
+        assert_eq!(
+            optional_name(Some(" chat ".into()), "twitch_out").as_deref(),
+            Some("chat")
+        );
+    }
+
+    #[test]
+    fn empty_or_off_disables_twitch_announcements() {
+        for value in ["", "  ", "-", "off", "NONE"] {
+            assert_eq!(optional_name(Some(value.into()), "twitch_out"), None);
         }
     }
 }

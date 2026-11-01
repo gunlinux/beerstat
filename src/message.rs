@@ -16,9 +16,27 @@ pub struct DonationPayload {
     /// Amount in the donor's currency; sent as an int or a float.
     #[serde(default)]
     pub amount_in_user_currency: Option<f64>,
+    /// Currency of `amount_in_user_currency`, e.g. `RUB`; used in chat only.
+    #[serde(default)]
+    pub currency: Option<String>,
     /// Optional donor message.
     #[serde(default)]
     pub message: Option<String>,
+}
+
+/// Body of a `twitch_out` chat message, shaped like the `FQueueMessage` the
+/// Twitch sender (retwitch) consumes. `source` is informational.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ChatMessage {
+    pub event: &'static str,
+    pub source: &'static str,
+    pub data: ChatEvent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ChatEvent {
+    pub event_type: &'static str,
+    pub message: String,
 }
 
 /// Body posted to the BeerStat `/donate` endpoint.
@@ -46,6 +64,34 @@ impl DonationPayload {
         }
     }
 
+    /// Announcement posted to `twitch_out`, mirroring the old Python worker's
+    /// wording so recurring donors see the same message.
+    pub fn to_chat_message(&self, admin: &str) -> ChatMessage {
+        ChatMessage {
+            event: "mssg",
+            source: "donations_alerts",
+            data: ChatEvent {
+                event_type: "mssg",
+                message: self.announcement(admin),
+            },
+        }
+    }
+
+    fn announcement(&self, admin: &str) -> String {
+        let name = self.donor_name();
+        let value = self.amount_in_user_currency.map(round_amount).unwrap_or(0);
+        let currency = self.currency.as_deref().map(str::trim).unwrap_or_default();
+        let amount = if currency.is_empty() {
+            format!("{value}")
+        } else {
+            format!("{value} {currency}")
+        };
+        match self.commentary() {
+            Some(text) => format!("@{admin} {name} пожертвовал {amount} | {text}"),
+            None => format!("@{admin} {name} пожертвовал {amount}"),
+        }
+    }
+
     /// An empty donor name becomes [`ANONYMOUS_NAME`], because the API requires
     /// a non-empty name.
     fn donor_name(&self) -> String {
@@ -69,7 +115,7 @@ fn round_amount(amount: f64) -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{ANONYMOUS_NAME, Donation, DonationPayload, round_amount};
+    use super::{ANONYMOUS_NAME, ChatEvent, ChatMessage, Donation, DonationPayload, round_amount};
     use chrono::{DateTime, Utc};
 
     fn at(ts: &str) -> DateTime<Utc> {
@@ -191,6 +237,49 @@ mod tests {
                 "value": 333,
                 "name": ANONYMOUS_NAME,
                 "commentary": null,
+            })
+        );
+    }
+
+    #[test]
+    fn builds_the_twitch_chat_message() {
+        let payload = parse(
+            r#"{"username":"loki","amount_in_user_currency":333,"currency":"RUB","message":"ahaha"}"#,
+        );
+        assert_eq!(
+            payload.to_chat_message("gunlinux"),
+            ChatMessage {
+                event: "mssg",
+                source: "donations_alerts",
+                data: ChatEvent {
+                    event_type: "mssg",
+                    message: "@gunlinux loki пожертвовал 333 RUB | ahaha".into(),
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn chat_message_omits_empty_commentary_and_currency() {
+        let payload = parse(r#"{"amount_in_user_currency":10,"currency":"  "}"#);
+        assert_eq!(
+            payload.to_chat_message("gunlinux").data.message,
+            "@gunlinux Anonym пожертвовал 10"
+        );
+    }
+
+    #[test]
+    fn serializes_the_twitch_chat_message() {
+        let payload = parse(r#"{"amount_in_user_currency":333}"#);
+        assert_eq!(
+            serde_json::to_value(payload.to_chat_message("gunlinux")).expect("serialize"),
+            serde_json::json!({
+                "event": "mssg",
+                "source": "donations_alerts",
+                "data": {
+                    "event_type": "mssg",
+                    "message": "@gunlinux Anonym пожертвовал 333",
+                },
             })
         );
     }
